@@ -1,0 +1,32 @@
+{
+  "name": "tweets-hdfs3-sink",
+  "config": {
+    "connector.class": "io.confluent.connect.hdfs3.Hdfs3SinkConnector",
+    "tasks.max": "1",
+
+    "topics": "tweets_topic",
+
+    "hdfs.url": "hdfs://namenode:9000",
+    "topics.dir": "/project/streamed_tweets_avro",
+    "logs.dir": "/project/connect_logs",
+
+    "flush.size": "5",
+
+    "format.class": "io.confluent.connect.hdfs3.avro.AvroFormat",
+
+    "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+    "path.format": "YYYY-MM-dd",
+    "partition.duration.ms": "86400000",
+    "timestamp.extractor": "Wallclock",
+    "timezone": "UTC",
+    "locale": "en",
+
+    "schema.compatibility": "NONE",
+
+    "confluent.topic.bootstrap.servers": "kafka:29092",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081"
+  }
+}

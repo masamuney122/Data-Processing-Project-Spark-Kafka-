@@ -1,0 +1,236 @@
+version: "3.8"
+
+services:
+  # =========================
+  # HDFS
+  # =========================
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    restart: always
+    environment:
+      - CLUSTER_NAME=twitter-lambda
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+
+      # Proxy User (HIVE İÇİN KRİTİK)
+      - CORE_CONF_hadoop_proxyuser_root_hosts=*
+      - CORE_CONF_hadoop_proxyuser_root_groups=*
+      - CORE_CONF_hadoop_proxyuser_hive_hosts=*
+      - CORE_CONF_hadoop_proxyuser_hive_groups=*
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [bigdata]
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    restart: always
+    depends_on:
+      namenode:
+        condition: service_healthy
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - SERVICE_PRECONDITION=namenode:9870
+
+      # Proxy User
+      - CORE_CONF_hadoop_proxyuser_root_hosts=*
+      - CORE_CONF_hadoop_proxyuser_root_groups=*
+      - CORE_CONF_hadoop_proxyuser_hive_hosts=*
+      - CORE_CONF_hadoop_proxyuser_hive_groups=*
+    ports:
+      - "9864:9864"
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+    networks: [bigdata]
+
+  # =========================
+  # Hive Metastore DB
+  # =========================
+  hive-metastore-db:
+    image: postgres:9.6
+    container_name: hive-metastore-db
+    restart: always
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - hive_metastore_db:/var/lib/postgresql/data
+    networks: [bigdata]
+
+  # =========================
+  # Hive Metastore
+  # =========================
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    restart: "no"
+    command: /opt/hive/bin/hive --service metastore
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore-db
+    ports:
+      - "9083:9083"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870 datanode:9864 hive-metastore-db:5432
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-db:5432/metastore
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName=org.postgresql.Driver
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName=hive
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword=hive
+
+      - HIVE_SITE_CONF_hive_metastore_uris=thrift://hive-metastore:9083
+
+      - CORE_CONF_hadoop_proxyuser_root_hosts=*
+      - CORE_CONF_hadoop_proxyuser_root_groups=*
+      - CORE_CONF_hadoop_proxyuser_hive_hosts=*
+      - CORE_CONF_hadoop_proxyuser_hive_groups=*
+    networks: [bigdata]
+
+  # =========================
+  # HiveServer2
+  # =========================
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    restart: always
+    depends_on:
+      - hive-metastore
+    command: /opt/hive/bin/hiveserver2
+    ports:
+      - "10000:10000"
+    environment:
+      - SERVICE_PRECONDITION=hive-metastore:9083
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - HIVE_SITE_CONF_hive_metastore_uris=thrift://hive-metastore:9083
+
+      # Beeline için kritik
+      - CORE_CONF_hadoop_proxyuser_root_hosts=*
+      - CORE_CONF_hadoop_proxyuser_root_groups=*
+      - CORE_CONF_hadoop_proxyuser_hive_hosts=*
+      - CORE_CONF_hadoop_proxyuser_hive_groups=*
+    networks: [bigdata]
+
+  # =========================
+  # Zookeeper
+  # =========================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.2
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks: [bigdata]
+
+  # =========================
+  # Kafka
+  # =========================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.2
+    container_name: kafka
+    depends_on: [zookeeper]
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_DELETE_TOPIC_ENABLE: "true"
+    networks: [bigdata]
+
+  # =========================
+  # Schema Registry
+  # =========================
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.2
+    container_name: schema-registry
+    depends_on: [kafka]
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+    networks: [bigdata]
+
+  # =========================
+  # Kafka Connect (HDFS Sink)
+  # =========================
+  kafka-connect:
+    build: ./kafka-connect
+    container_name: kafka-connect
+    depends_on:
+      - kafka
+      - schema-registry
+      - namenode
+      - datanode
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    volumes:
+      - ./connect/hadoop-conf:/etc/hadoop/conf
+    networks: [bigdata]
+
+  # =========================
+  # Spark
+  # =========================
+  spark-master:
+    image: apache/spark:3.4.2
+    container_name: spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./hive-site.xml:/opt/spark/conf/hive-site.xml
+    networks: [bigdata]
+
+  spark-worker:
+    image: apache/spark:3.4.2
+    container_name: spark-worker
+    depends_on: [spark-master]
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    ports:
+      - "8082:8081"
+    volumes:
+      - ./hive-site.xml:/opt/spark/conf/hive-site.xml
+    networks: [bigdata]
+
+networks:
+  bigdata:
+
+volumes:
+  namenode_data:
+  datanode_data:
+  hive_metastore_db:

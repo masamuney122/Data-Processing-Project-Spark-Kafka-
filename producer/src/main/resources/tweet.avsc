@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "Tweet",
+  "namespace": "com.project.avro",
+  "fields": [
+    { "name": "tweet_id", "type": "string" },
+    { "name": "airline", "type": "string" },
+    { "name": "airline_sentiment", "type": "string" },
+    { "name": "text", "type": "string" },
+    { "name": "tweet_created", "type": "string" }
+  ]
+}
